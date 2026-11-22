@@ -1,4 +1,4 @@
-const V = require("../../public/js/validate");
+const V = require("../validate");
 const { text } = require("./guards");
 
 function readContact(body) {

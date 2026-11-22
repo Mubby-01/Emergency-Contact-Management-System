@@ -1,9 +1,13 @@
 const express = require("express");
-const V = require("../../public/js/validate");
+const V = require("../validate");
 const { requireUser, text, rejectIfInvalid } = require("./guards");
 const { hashPassword, verifyPassword } = require("../security/passwords");
 const { BLOOD_GROUPS } = require("../store");
-const { detectImageType, cleanImage, IMAGE_TYPES } = require("../security/images");
+const {
+  detectImageType,
+  cleanImage,
+  IMAGE_TYPES,
+} = require("../security/images");
 
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
 
@@ -41,23 +45,41 @@ module.exports = function profileRoutes({ store, sessions, otp }) {
     res.send(Buffer.from(photo.data));
   });
 
-  r.put("/profile/photo", express.raw({ type: IMAGE_TYPES, limit: MAX_PHOTO_BYTES }), async (req, res) => {
-    const type = detectImageType(req.body);
-    if (!type) {
-      return res.status(422).json({ error: "Error: that file isn't a JPG, PNG or WebP picture." });
-    }
-    const clean = cleanImage(req.body, type);
-    if (!clean) {
-      return res.status(422).json({ error: "Error: that picture looks damaged. Try another one." });
-    }
-    const version = await store.photos.set(req.user.id, type, clean);
-    await store.audit.log("photo_updated", { actorId: req.user.id, subjectId: req.user.id });
-    res.json({ ok: true, photo: version, message: "Photo updated." });
-  });
+  r.put(
+    "/profile/photo",
+    express.raw({ type: IMAGE_TYPES, limit: MAX_PHOTO_BYTES }),
+    async (req, res) => {
+      const type = detectImageType(req.body);
+      if (!type) {
+        return res
+          .status(422)
+          .json({
+            error: "Error: that file isn't a JPG, PNG or WebP picture.",
+          });
+      }
+      const clean = cleanImage(req.body, type);
+      if (!clean) {
+        return res
+          .status(422)
+          .json({
+            error: "Error: that picture looks damaged. Try another one.",
+          });
+      }
+      const version = await store.photos.set(req.user.id, type, clean);
+      await store.audit.log("photo_updated", {
+        actorId: req.user.id,
+        subjectId: req.user.id,
+      });
+      res.json({ ok: true, photo: version, message: "Photo updated." });
+    },
+  );
 
   r.delete("/profile/photo", async (req, res) => {
     if (await store.photos.remove(req.user.id)) {
-      await store.audit.log("photo_removed", { actorId: req.user.id, subjectId: req.user.id });
+      await store.audit.log("photo_removed", {
+        actorId: req.user.id,
+        subjectId: req.user.id,
+      });
     }
     res.json({ ok: true, photo: null, message: "Photo removed." });
   });
@@ -66,14 +88,27 @@ module.exports = function profileRoutes({ store, sessions, otp }) {
     const name = text(req.body, "name");
     const email = text(req.body, "email");
     const phone = text(req.body, "phone");
-    const errors = { name: V.name(name), email: V.email(email), phone: phone ? V.phone(phone) : null };
-    if (!errors.email && await store.users.emailTaken(email, req.user.id)) errors.email = "Error: another account already uses this email.";
+    const errors = {
+      name: V.name(name),
+      email: V.email(email),
+      phone: phone ? V.phone(phone) : null,
+    };
+    if (!errors.email && (await store.users.emailTaken(email, req.user.id)))
+      errors.email = "Error: another account already uses this email.";
     if (rejectIfInvalid(res, errors)) return;
 
     const changingEmail = email.toLowerCase() !== req.user.email.toLowerCase();
-    await store.users.updateDetails(req.user.id, { name, email: req.user.email, phone: phone ? V.normalizePhone(phone) : null });
-    await store.audit.log("profile_updated", { actorId: req.user.id, subjectId: req.user.id });
-    if (!changingEmail) return res.json({ ok: true, message: "Details saved." });
+    await store.users.updateDetails(req.user.id, {
+      name,
+      email: req.user.email,
+      phone: phone ? V.normalizePhone(phone) : null,
+    });
+    await store.audit.log("profile_updated", {
+      actorId: req.user.id,
+      subjectId: req.user.id,
+    });
+    if (!changingEmail)
+      return res.json({ ok: true, message: "Details saved." });
 
     await store.users.setPendingEmail(req.user.id, email);
     let sent;
@@ -87,49 +122,91 @@ module.exports = function profileRoutes({ store, sessions, otp }) {
       ok: true,
       pendingEmail: email,
       message: sent.failed
-        ? "Details saved. We couldn't email " + email + " just now - tap \"Send a new code\" in a moment."
+        ? "Details saved. We couldn't email " +
+          email +
+          ' just now - tap "Send a new code" in a moment.'
         : !sent.sent
-          ? "Details saved. Wait " + sent.waitSeconds + " seconds, then tap \"Send a new code\" to get a code for " + email + "."
-          : "Details saved. Enter the code we sent to " + email + " to finish changing your email.",
+          ? "Details saved. Wait " +
+            sent.waitSeconds +
+            ' seconds, then tap "Send a new code" to get a code for ' +
+            email +
+            "."
+          : "Details saved. Enter the code we sent to " +
+            email +
+            " to finish changing your email.",
     });
   });
 
   r.post("/profile/email/confirm", async (req, res) => {
     const pending = req.user.pending_email;
     const code = text(req.body, "code").replace(/\s/g, "");
-    if (!pending) return res.status(400).json({ error: "There's no email change waiting to be confirmed." });
-    if (!/^\d{6}$/.test(code)) return res.status(400).json({ error: "Error: enter the 6-digit code." });
+    if (!pending)
+      return res
+        .status(400)
+        .json({ error: "There's no email change waiting to be confirmed." });
+    if (!/^\d{6}$/.test(code))
+      return res.status(400).json({ error: "Error: enter the 6-digit code." });
 
     const result = await otp.check(req.user, "email_change", code);
     if (!result.ok || result.email.toLowerCase() !== pending.toLowerCase()) {
-      const error = result.reason === "locked"
-        ? "Error: too many wrong codes. Send a new code and try again."
-        : "Error: that code is wrong or has expired.";
+      const error =
+        result.reason === "locked"
+          ? "Error: too many wrong codes. Send a new code and try again."
+          : "Error: that code is wrong or has expired.";
       return res.status(400).json({ error });
     }
     if (await store.users.emailTaken(pending, req.user.id)) {
       await store.users.setPendingEmail(req.user.id, null);
-      return res.status(409).json({ error: "Error: another account started using that email. Choose a different one." });
+      return res
+        .status(409)
+        .json({
+          error:
+            "Error: another account started using that email. Choose a different one.",
+        });
     }
     await store.users.applyPendingEmail(req.user.id);
-    await store.audit.log("email_changed", { actorId: req.user.id, subjectId: req.user.id });
-    res.json({ ok: true, email: pending, message: "Email changed to " + pending + "." });
+    await store.audit.log("email_changed", {
+      actorId: req.user.id,
+      subjectId: req.user.id,
+    });
+    res.json({
+      ok: true,
+      email: pending,
+      message: "Email changed to " + pending + ".",
+    });
   });
 
   r.post("/profile/email/resend", async (req, res) => {
     const pending = req.user.pending_email;
-    if (!pending) return res.status(400).json({ error: "There's no email change waiting to be confirmed." });
+    if (!pending)
+      return res
+        .status(400)
+        .json({ error: "There's no email change waiting to be confirmed." });
     let result;
     try {
       result = await otp.issue(req.user, "email_change", pending);
     } catch (err) {
       console.error("Couldn't send verification email:", err.message);
-      return res.status(502).json({ error: "We couldn't send the email. Try again in a moment." });
+      return res
+        .status(502)
+        .json({ error: "We couldn't send the email. Try again in a moment." });
     }
     if (!result.sent) {
-      return res.status(429).json({ error: "Please wait " + result.waitSeconds + " seconds before asking for another code.", waitSeconds: result.waitSeconds });
+      return res
+        .status(429)
+        .json({
+          error:
+            "Please wait " +
+            result.waitSeconds +
+            " seconds before asking for another code.",
+          waitSeconds: result.waitSeconds,
+        });
     }
-    res.json({ ok: true, waitSeconds: result.waitSeconds, message: "New code sent to " + pending + "." });
+    res.json({
+      ok: true,
+      waitSeconds: result.waitSeconds,
+      message: "New code sent to " + pending + ".",
+    });
   });
 
   r.post("/profile/email/cancel", async (req, res) => {
@@ -139,15 +216,23 @@ module.exports = function profileRoutes({ store, sessions, otp }) {
   });
 
   r.put("/profile/medical", async (req, res) => {
-    const medical = { bloodGroup: str(req.body, "bloodGroup"), allergies: text(req.body, "allergies") };
+    const medical = {
+      bloodGroup: str(req.body, "bloodGroup"),
+      allergies: text(req.body, "allergies"),
+    };
     const errors = {
-      bloodGroup: BLOOD_GROUPS.includes(medical.bloodGroup) ? null : "Error: choose a blood group from the list.",
+      bloodGroup: BLOOD_GROUPS.includes(medical.bloodGroup)
+        ? null
+        : "Error: choose a blood group from the list.",
       allergies: V.allergies(medical.allergies),
     };
     if (rejectIfInvalid(res, errors)) return;
 
     await store.users.setMedical(req.user.id, medical);
-    await store.audit.log("medical_updated", { actorId: req.user.id, subjectId: req.user.id });
+    await store.audit.log("medical_updated", {
+      actorId: req.user.id,
+      subjectId: req.user.id,
+    });
     res.json({ ok: true, message: "Medical notes saved and encrypted." });
   });
 
@@ -156,16 +241,32 @@ module.exports = function profileRoutes({ store, sessions, otp }) {
       const current = str(req.body, "currentPassword");
       const fresh = str(req.body, "newPassword");
       const errors = {
-        currentPassword: !req.user.has_password || (await verifyPassword(current, req.user.password_hash)) ? null : "Error: that isn't your current password.",
-        newPassword: V.password(fresh) || (fresh === current ? "Error: choose a password you haven't used here." : null),
+        currentPassword:
+          !req.user.has_password ||
+          (await verifyPassword(current, req.user.password_hash))
+            ? null
+            : "Error: that isn't your current password.",
+        newPassword:
+          V.password(fresh) ||
+          (fresh === current
+            ? "Error: choose a password you haven't used here."
+            : null),
       };
       if (rejectIfInvalid(res, errors)) return;
 
       await store.users.updatePassword(req.user.id, await hashPassword(fresh));
-      await store.audit.log("password_changed", { actorId: req.user.id, subjectId: req.user.id });
+      await store.audit.log("password_changed", {
+        actorId: req.user.id,
+        subjectId: req.user.id,
+      });
       await sessions.endAllFor(req.user.id);
-      await sessions.start(req, res, req.user.id, { persistent: !!req.session.persistent });
-      res.json({ ok: true, message: "Password updated. Other devices have been signed out." });
+      await sessions.start(req, res, req.user.id, {
+        persistent: !!req.session.persistent,
+      });
+      res.json({
+        ok: true,
+        message: "Password updated. Other devices have been signed out.",
+      });
     } catch (err) {
       next(err);
     }
@@ -174,14 +275,38 @@ module.exports = function profileRoutes({ store, sessions, otp }) {
   r.delete("/profile", async (req, res, next) => {
     try {
       if (req.user.has_password) {
-        if (!(await verifyPassword(str(req.body, "password"), req.user.password_hash))) {
-          return res.status(422).json({ error: "Error: that password is wrong. Nothing was deleted.", fields: { password: "Error: that password is wrong." } });
+        if (
+          !(await verifyPassword(
+            str(req.body, "password"),
+            req.user.password_hash,
+          ))
+        ) {
+          return res
+            .status(422)
+            .json({
+              error: "Error: that password is wrong. Nothing was deleted.",
+              fields: { password: "Error: that password is wrong." },
+            });
         }
-      } else if (str(req.body, "confirmEmail").trim().toLowerCase() !== req.user.email.toLowerCase()) {
-        return res.status(422).json({ error: "Error: type your email exactly to confirm. Nothing was deleted.", fields: { password: "Error: that isn't your email." } });
+      } else if (
+        str(req.body, "confirmEmail").trim().toLowerCase() !==
+        req.user.email.toLowerCase()
+      ) {
+        return res
+          .status(422)
+          .json({
+            error:
+              "Error: type your email exactly to confirm. Nothing was deleted.",
+            fields: { password: "Error: that isn't your email." },
+          });
       }
-      if (req.user.role === "admin" && await store.users.adminCount() <= 1) {
-        return res.status(422).json({ error: "Error: you are the only admin. Make someone else an admin first." });
+      if (req.user.role === "admin" && (await store.users.adminCount()) <= 1) {
+        return res
+          .status(422)
+          .json({
+            error:
+              "Error: you are the only admin. Make someone else an admin first.",
+          });
       }
       const id = req.user.id;
       await sessions.end(req, res);
